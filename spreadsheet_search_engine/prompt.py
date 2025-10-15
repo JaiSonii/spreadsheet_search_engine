@@ -45,3 +45,6 @@ SYSTEM_PROMPT = """You are an expert financial analyst's assistant. Your task is
     Now, parse the user's query provided below.
     {format_instructions}
     """
+
+ANALAYZE_FORUMLA_SYSTEM_PROMPT = "You are an expert financial analyst. Your task is to analyze a spreadsheet formula within its context and explain its business purpose. Provide a concise explanation and identify the key business concepts involved. {format_instructions}"
+ANALAYZE_FORUMLA_HUMAN_PROMPT = "Analyze this spreadsheet formula:\n- Formula: `{formula}`\n- Column Header: `{header}`\n- Row Context: `{row_context}`"

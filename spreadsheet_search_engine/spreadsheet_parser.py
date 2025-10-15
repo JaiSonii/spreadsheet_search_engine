@@ -30,7 +30,7 @@ class SpreadsheetParser:
             'cells': [],
             'formulas': [],
             'headers': {},
-            'sheet_context': {}, # NEW: For workbook-level context
+            'sheet_context': {},
             'metadata': {
                 'filename': file_path,
                 'sheet_count': len(workbook.sheetnames)
@@ -38,7 +38,6 @@ class SpreadsheetParser:
         }
         
         for sheet_name in workbook.sheetnames:
-            # NEW: Analyze sheet name for concepts
             sheet_concepts = self._analyze_sheet_name(sheet_name)
             parsed_data['sheet_context'][sheet_name] = sheet_concepts
             
@@ -91,7 +90,7 @@ class SpreadsheetParser:
                 if cell.value is not None:
                     # Pass sheet_concepts down to the cell parser
                     cell_data = self._parse_cell(
-                        cell, sheet_name, row_idx, col_idx, headers.get(col_idx), sheet_concepts
+                        cell, sheet_name, row_idx, col_idx, headers.get(col_idx, ''), sheet_concepts 
                     )
                     sheet_data['cells'].append(cell_data)
                     

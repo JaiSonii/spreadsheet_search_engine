@@ -4,321 +4,214 @@ Understands business concepts, context, and meaning of spreadsheet content
 """
 
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 from sentence_transformers import SentenceTransformer
-from typing import Optional
+from .prompt import ANALAYZE_FORUMLA_SYSTEM_PROMPT, ANALAYZE_FORUMLA_HUMAN_PROMPT
+
+class FormulaAnalysis(BaseModel):
+    """Structured analysis of a spreadsheet formula's business meaning."""
+    explanation: str = Field(description="A brief, human-readable explanation of what this formula calculates.")
+    likely_concept: str = Field(description="The most likely business concept this formula represents, e.g., 'Profit Margin', 'Budget Variance', 'Total Revenue'.")
+    related_concepts: List[str] = Field(description="A list of other related business concepts or tags.")
 
 
 class SemanticAnalyzer:
     def __init__(self):
         # Load embedding model
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        # Business concept knowledge base
+        self._llm = ChatOpenAI(model='gpt-4o-mini', temperature=0)
+
         self.concept_map = {
-            'revenue': {
-                'synonyms': ['sales', 'income', 'turnover', 'receipts', 'earnings'],
-                'related': ['gross revenue', 'net revenue', 'total sales'],
-                'category': 'financial'
-            },
-            'cost': {
-                'synonyms': ['expense', 'expenditure', 'spending', 'cogs', 'cost of goods sold'],
-                'related': ['operating cost', 'overhead', 'direct cost', 'indirect cost'],
-                'category': 'financial'
-            },
-            'profit': {
-                'synonyms': ['earnings', 'net income', 'bottom line', 'surplus'],
-                'related': ['gross profit', 'net profit', 'operating profit', 'ebitda'],
-                'category': 'financial'
-            },
-            'margin': {
-                'synonyms': ['markup', 'spread', 'profit margin'],
-                'related': ['gross margin', 'net margin', 'operating margin', 'contribution margin'],
-                'category': 'financial'
-            },
-            'efficiency': {
-                'synonyms': ['productivity', 'performance', 'effectiveness'],
-                'related': ['roi', 'roa', 'roe', 'asset turnover', 'inventory turnover'],
-                'category': 'ratio'
-            },
-            'growth': {
-                'synonyms': ['increase', 'expansion', 'development'],
-                'related': ['yoy', 'qoq', 'cagr', 'growth rate'],
-                'category': 'trend'
-            },
-            'budget': {
-                'synonyms': ['plan', 'forecast', 'projection', 'target'],
-                'related': ['budgeted', 'planned', 'estimated'],
-                'category': 'planning'
-            },
-            'actual': {
-                'synonyms': ['realized', 'achieved', 'real', 'current'],
-                'related': ['actuals', 'actual results'],
-                'category': 'results'
-            },
-            'variance': {
-                'synonyms': ['difference', 'deviation', 'gap'],
-                'related': ['budget variance', 'forecast variance'],
-                'category': 'comparison'
-            },
-            'ratio': {
-                'synonyms': ['proportion', 'percentage', 'rate'],
-                'related': ['financial ratio', 'metric', 'kpi'],
-                'category': 'metric'
-            }
-        }
-        
-        # Formula semantic patterns
-        self.formula_semantics = {
-            'profitability': ['margin', 'profit', 'earnings', 'ebitda'],
-            'efficiency': ['turnover', 'roi', 'roa', 'roe'],
-            'growth': ['yoy', 'qoq', 'cagr', 'growth'],
-            'comparison': ['variance', 'vs', 'budget', 'actual'],
-            'aggregation': ['sum', 'total', 'average', 'count']
+            'revenue': {'synonyms': ['sales', 'income', 'turnover', 'receipts']},
+            'cost': {'synonyms': ['expense', 'expenditure', 'spending', 'cogs']},
+            'profit': {'synonyms': ['earnings', 'net income', 'ebitda']},
+            'margin': {'synonyms': ['markup', 'spread', 'profit margin']},
+            'efficiency': {'synonyms': ['productivity', 'roi', 'roa', 'roe', 'turnover']},
+            'growth': {'synonyms': ['increase', 'expansion', 'yoy', 'qoq', 'cagr']},
+            'budget': {'synonyms': ['plan', 'forecast', 'projection', 'target']},
+            'actual': {'synonyms': ['realized', 'achieved', 'current']},
+            'variance': {'synonyms': ['difference', 'deviation', 'gap']},
+            'ratio': {'synonyms': ['proportion', 'percentage', 'rate', 'metric']},
         }
 
     def analyze(self, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze parsed data and add semantic understanding"""
+        """Analyze parsed data and add semantic understanding."""
         semantic_data = parsed_data.copy()
-        
-        # Analyze each cell
+
+        # Analyze each cell, passing the full data for context
         for cell in semantic_data['cells']:
-            self._analyze_cell(cell, parsed_data)
-        
+            self._analyze_cell(cell, semantic_data) 
+
         return semantic_data
 
     def _analyze_cell(self, cell: Dict[str, Any], full_data: Dict[str, Any]):
-        """Add semantic analysis to a cell"""
-        # Recognize business concepts
+        """Add semantic analysis to a single cell."""
+        # Recognize basic concepts from text
         cell['concepts'] = self._recognize_concepts(cell)
-        
-        # Incorporate sheet-level context
-        if cell.get('sheet_concepts'):
-            cell['concepts'].extend(cell['sheet_concepts'])
-            cell['concepts'] = list(set(cell['concepts']))
 
-        # Understand context
-        cell['semantic_context'] = self._build_context(cell, full_data)
-        
         # Analyze formula if present
         if cell.get('formula'):
-            # FIX: Ensure header is a string, not None
             header = cell.get('header') or ''
-            cell['formula_semantics'] = self._analyze_formula(cell['formula'])
-            cell['concepts'].extend(self._extract_formula_concepts(cell['formula'], header))
-            cell['concepts'] = list(set(cell['concepts']))
+            row_context_str = self._build_row_context_string(cell, full_data)
+
+            llm_analysis = self._analyze_formula_with_llm(cell['formula'], header, row_context_str)
+            if llm_analysis:
+                cell['formula_semantics'] = {
+                    'type': llm_analysis.likely_concept.lower().replace(' ', '_'),
+                    'explanation': llm_analysis.explanation,
+                    'complexity': self._calculate_formula_complexity(cell['formula'])
+                }
+                # Add concepts from LLM analysis
+                cell['concepts'].append(llm_analysis.likely_concept.lower().replace(' ', '_'))
+                cell['concepts'].extend(llm_analysis.related_concepts)
+            else: # Fallback to basic analysis
+                cell['formula_semantics'] = self._analyze_formula_basic(cell['formula'])
         
+        # Consolidate all concepts
+        if cell.get('sheet_concepts'):
+            cell['concepts'].extend(cell['sheet_concepts'])
+        cell['concepts'] = sorted(list(set(c.lower() for c in cell['concepts'])))
+
         # Calculate importance score
         cell['importance'] = self._calculate_importance(cell)
-        
-        # Generate embedding
-        cell['embedding'] = self._generate_embedding(cell)
+
+        cell['embedding'] = self._generate_embedding(cell, full_data)
 
     def _recognize_concepts(self, cell: Dict[str, Any]) -> List[str]:
-        """Recognize business concepts in cell"""
+        """Recognize business concepts in a cell based on keywords."""
         concepts = []
-        
-        # Build searchable text from cell
-        search_text = []
-        if cell.get('header'):
-            search_text.append(cell['header'])
-        if cell.get('value'):
-            search_text.append(str(cell['value']))
-        if cell.get('formula'):
-            search_text.append(cell['formula'])
-        
-        search_text = ' '.join(search_text).lower()
-        
-        # Check against concept map
+        search_text = f"{cell.get('header', '')} {cell.get('value', '')}".lower()
+
         for concept, info in self.concept_map.items():
             if concept in search_text:
                 concepts.append(concept)
                 continue
-            
-            # Check synonyms
-            for synonym in info['synonyms']:
+            for synonym in info.get('synonyms', []):
                 if synonym in search_text:
                     concepts.append(concept)
                     break
-        
-        # Recognize formula-based concepts
-        if cell.get('formula'):
-            # FIX: Ensure header is a string here as well
-            header = cell.get('header') or ''
-            formula_concepts = self._extract_formula_concepts(cell['formula'], header)
-            concepts.extend(formula_concepts)
-        
         return list(set(concepts))
 
-    def _extract_formula_concepts(self, formula: str, header: str = "") -> List[str]:
-        """Extract business concepts from formula structure, using header for context."""
-        concepts = []
-        formula_lower = formula.lower()
-        # This line is now safe because the callers ensure header is a string
-        header_lower = header.lower()
+    def _analyze_formula_with_llm(self, formula: str, header: str, row_context: str) -> Optional[FormulaAnalysis]:
+        """Use an LLM to interpret the business meaning of a formula."""
+        parser = PydanticOutputParser(pydantic_object=FormulaAnalysis)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", ANALAYZE_FORUMLA_SYSTEM_PROMPT),
+            ("human", ANALAYZE_FORUMLA_HUMAN_PROMPT)
+        ])
+        chain = prompt | self._llm | parser
+        try:
+            return chain.invoke({
+                "formula": formula,
+                "header": header,
+                "row_context": row_context,
+                "format_instructions": parser.get_format_instructions()
+            })
+        except Exception as e:
+            print(f"LLM formula analysis failed: {e}. Falling back to basic analysis.")
+            return None
 
-        # Check if it's a percentage/ratio calculation
-        if '/' in formula:
-            concepts.append('ratio')
-
-            if 'margin' in header_lower or 'profitability' in header_lower:
-                concepts.append('profitability_metric')
-                concepts.append('margin_calculation')
-            elif 'variance' in header_lower and '%' in header_lower:
-                concepts.append('variance_analysis')
-
-        # Check for aggregations
-        if any(func in formula.upper() for func in ['SUM', 'AVERAGE', 'COUNT']):
-            concepts.append('aggregation')
-            if 'total' in header_lower:
-                concepts.append('total_calculation')
-
-        # Check for comparisons (Budget vs Actual)
-        if '-' in formula and ('budget' in header_lower or 'actual' in header_lower or 'variance' in header_lower):
-            concepts.append('variance_analysis')
-            concepts.append('comparison')
-
-        return concepts
-
-    def _build_context(self, cell: Dict[str, Any], full_data: Dict[str, Any]) -> str:
-        """Build semantic context for the cell"""
-        context_parts = []
+    def _build_row_context_string(self, cell: Dict[str, Any], full_data: Dict[str, Any]) -> str:
+        """Creates a string summarizing the data in the same row as the given cell."""
+        row_context = []
+        for c in full_data.get('cells', []):
+            # Find cells in the same row but not the cell itself
+            if c['row'] == cell['row'] and c['column'] != cell['column'] and c.get('header'):
+                header = c['header']
+                value = c.get('value', 'N/A')
+                # Only include non-empty, useful context
+                if value and str(value).strip():
+                    row_context.append(f"{header}: {value}")
         
-        context_parts.append(f"Sheet: {cell['sheet']}")
+        return "; ".join(row_context[:5]) # Limit to 5 for brevity
+
+    def _generate_embedding(self, cell: Dict[str, Any], full_data: Dict[str, Any]) -> List[float]:
+        """Generate a rich, context-aware embedding for the cell."""
+        text_parts = []
+        header = cell.get('header', '')
         
-        if cell.get('header'):
-            context_parts.append(f"Column: {cell['header']}")
-        
+        # 1. Core identity: Header and Value/Formula
+        if header:
+            text_parts.append(f"Column: {header}.")
         if cell.get('formula'):
-            # FIX: Ensure header is a string before passing to explain_formula
-            header = cell.get('header') or ''
-            formula_meaning = self._explain_formula(cell['formula'], header)
-            if formula_meaning:
-                context_parts.append(formula_meaning)
-        
+            explanation = cell.get('formula_semantics', {}).get('explanation', 'A calculation.')
+            text_parts.append(f"Content: This cell is a formula that represents '{explanation}'.")
+        elif cell.get('value') is not None:
+            text_parts.append(f"Content: The value is '{cell['value']}'.")
+
+        # 2. Semantic layer: Concepts
         if cell.get('concepts'):
-            context_parts.append(f"Concepts: {', '.join(cell['concepts'])}")
+            text_parts.append(f"Business Concepts: {', '.join(cell['concepts'])}.")
+
+        # 3. Structural layer: Row context
+        row_context_str = self._build_row_context_string(cell, full_data)
+        if row_context_str:
+            text_parts.append(f"Row Context: This cell is in a row with data like [{row_context_str}].")
+
+        # 4. Location layer: Sheet context
+        sheet = cell.get('sheet', '')
+        sheet_concepts = cell.get('sheet_concepts', [])
+        if sheet:
+            text_parts.append(f"Location: Found in the '{sheet}' sheet.")
+        if sheet_concepts:
+            text_parts.append(f"The sheet is related to: {', '.join(sheet_concepts)}.")
         
-        return ' | '.join(context_parts)
-
-    def _explain_formula(self, formula: str, header: str) -> str:
-        """Generate human-readable explanation of formula"""
-        formula_upper = formula.upper()
+        embedding_text = " ".join(filter(None, text_parts))
         
-        if 'SUM' in formula_upper:
-            base = header if header else "values"
-            return f"Calculates total {base}"
-        elif 'AVERAGE' in formula_upper:
-            base = header if header else "values"
-            return f"Calculates average {base}"
-        elif '/' in formula and header:
-            if any(word in header.lower() for word in ['margin', 'percent', 'ratio']):
-                return f"Calculates {header.lower()}"
-        elif 'IF' in formula_upper:
-            return "Conditional calculation"
-        elif 'VLOOKUP' in formula_upper:
-            return "Lookup calculation"
-        
-        return "Custom calculation"
-
-    def _analyze_formula(self, formula: str) -> Dict[str, Any]:
-        """Analyze formula semantics"""
-        return {
-            'type': self._get_formula_type(formula),
-            'complexity': self._calculate_formula_complexity(formula),
-            'operations': self._extract_operations(formula)
-        }
-
-    def _get_formula_type(self, formula: str) -> str:
-        """Determine primary formula type"""
-        formula_upper = formula.upper()
-        
-        if 'SUM' in formula_upper:
-            return 'aggregation'
-        elif 'AVERAGE' in formula_upper:
-            return 'aggregation'
-        elif 'IF' in formula_upper:
-            return 'conditional'
-        elif 'VLOOKUP' in formula_upper or 'XLOOKUP' in formula_upper:
-            return 'lookup'
-        elif '/' in formula:
-            return 'ratio'
-        else:
-            return 'calculation'
-
-    def _calculate_formula_complexity(self, formula: str) -> int:
-        """Calculate formula complexity score"""
-        complexity = 0
-        complexity += formula.count('(') * 2
-        complexity += formula.count('+') + formula.count('-') + formula.count('*') + formula.count('/')
-        if 'IF' in formula.upper():
-            complexity += 3
-        if 'VLOOKUP' in formula.upper():
-            complexity += 4
-        return complexity
-
-    def _extract_operations(self, formula: str) -> List[str]:
-        """Extract all operations from formula"""
-        operations = []
-        formula_upper = formula.upper()
-        functions = ['SUM', 'AVERAGE', 'COUNT', 'IF', 'VLOOKUP', 'XLOOKUP', 'INDEX', 'MATCH']
-        for func in functions:
-            if func in formula_upper:
-                operations.append(func.lower())
-        return operations
+        return self.model.encode(embedding_text or "empty cell").tolist()
 
     def _calculate_importance(self, cell: Dict[str, Any]) -> float:
-        """Calculate importance score for cell"""
+        """Calculate an importance score for the cell (0.0 to 1.0)."""
         score = 0.0
-        
-        if cell.get('row') == 1:
-            score += 0.2
-        
-        if cell.get('formula'):
+        # Headers are important
+        if cell.get('row') == 1 and cell.get('data_type') == 'text':
             score += 0.3
-            if cell.get('formula_semantics'):
-                complexity = cell['formula_semantics'].get('complexity', 0)
-                score += min(complexity * 0.05, 0.3)
         
+        # Formulas are more important than raw data
+        if cell.get('formula'):
+            score += 0.4
+            # More complex formulas are more important
+            complexity = cell.get('formula_semantics', {}).get('complexity', 0)
+            score += min(complexity * 0.05, 0.3)
+        
+        # Cells with more concepts are more significant
         if cell.get('concepts'):
-            score += len(cell['concepts']) * 0.1
+            score += len(cell['concepts']) * 0.05
         
+        # Keywords in headers suggest importance
         if cell.get('header'):
-            # This check is safe because if cell.get('header') is None, the block is skipped.
-            header_lower = cell['header'].lower()
-            important_keywords = ['total', 'revenue', 'profit', 'margin', 'cost', 'ratio']
-            if any(kw in header_lower for kw in important_keywords):
+            important_keywords = ['total', 'summary', 'revenue', 'profit', 'margin', 'variance', 'yoy']
+            if any(kw in cell['header'].lower() for kw in important_keywords):
                 score += 0.2
         
         return min(score, 1.0)
+    
+    def _analyze_formula_basic(self, formula: str) -> Dict[str, Any]:
+        """Analyze formula semantics with basic pattern matching."""
+        return {
+            'type': self._get_formula_type_basic(formula),
+            'complexity': self._calculate_formula_complexity(formula),
+            'explanation': 'A custom calculation.'
+        }
 
-    def _generate_embedding(self, cell: Dict[str, Any]) -> List[float]:
-        """Generate embedding for cell content"""
-        text_parts = []
-        
-        if cell.get('header'):
-            text_parts.append(cell['header'])
-        
-        if cell.get('concepts'):
-            text_parts.append(' '.join(cell['concepts']))
-        
-        if cell.get('value') and cell['data_type'] == 'text':
-            text_parts.append(str(cell['value']))
-        
-        if cell.get('formula'):
-            # FIX: Ensure header is a string before passing to explain_formula
-            header = cell.get('header') or ''
-            explanation = self._explain_formula(cell['formula'], header)
-            text_parts.append(explanation)
-        
-        if cell.get('sheet_concepts'):
-            text_parts.append(' '.join(cell['sheet_concepts']))
-            
-        text_parts.append(cell.get('sheet', ''))
-        
-        embedding_text = ' '.join(filter(None, text_parts))
-        
-        if not embedding_text.strip():
-            embedding_text = "empty cell"
-        
-        return self.model.encode(embedding_text).tolist()
+    def _get_formula_type_basic(self, formula: str) -> str:
+        """Determine primary formula type with simple rules."""
+        formula_upper = formula.upper()
+        if 'SUM' in formula_upper or 'AVERAGE' in formula_upper: return 'aggregation'
+        if 'IF' in formula_upper: return 'conditional'
+        if 'VLOOKUP' in formula_upper or 'XLOOKUP' in formula_upper: return 'lookup'
+        if '/' in formula: return 'ratio'
+        if '-' in formula: return 'difference'
+        return 'calculation'
+
+    def _calculate_formula_complexity(self, formula: str) -> int:
+        """Calculate a numeric score for formula complexity."""
+        complexity = len(re.findall(r'[A-Z]+\(', formula)) # Functions
+        complexity += len(re.findall(r'[\+\-\*\/]', formula)) # Operators
+        complexity += formula.count('(') # Nesting
+        return complexity
