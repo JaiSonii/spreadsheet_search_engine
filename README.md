@@ -40,6 +40,14 @@ git clone https://github.com/JaiSonii/spreadsheet_search_engine
 cd semantic-spreadsheet-search
 
 # Install dependencies
+
+# Option 1 (use uv):
+uv sync
+
+# or directly run
+uv run main.py
+
+# Option 2 (use pip):
 pip install -r requirements.txt
 ```
 
