@@ -3,9 +3,7 @@
 A powerful semantic search system that understands spreadsheet content conceptually, allowing users to find what they're looking for using natural language queries.
 
 ### Design Document Link
-``` bash
-[https://docs.google.com/document/d/e/2PACX-1vRjTAL7iGW5gwI6lvocdUc3SZmbpw-M4GgS6uDVvGNTxmxaTaNUd_02P8b4j2bSWxrleAG75b0k0_Bj/pub][https://docs.google.com/document/d/e/2PACX-1vRjTAL7iGW5gwI6lvocdUc3SZmbpw-M4GgS6uDVvGNTxmxaTaNUd_02P8b4j2bSWxrleAG75b0k0_Bj/pub]
-```
+[Design Document](https://docs.google.com/document/d/e/2PACX-1vRjTAL7iGW5gwI6lvocdUc3SZmbpw-M4GgS6uDVvGNTxmxaTaNUd_02P8b4j2bSWxrleAG75b0k0_Bj/pub)
 
 ## Features
 
